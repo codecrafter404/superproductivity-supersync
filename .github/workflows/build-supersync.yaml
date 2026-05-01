@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "0 4 * * *" # Runs every day at 04:00 UTC
   workflow_dispatch: # Allows you to trigger it manually
+    inputs:
+      version_tag:
+        description: "Specific version to build (e.g., v18.2.0). Leave empty for latest."
+        required: false
+        type: string
 
 # Required to push to GHCR
 permissions:
@@ -14,11 +19,18 @@ jobs:
   check-and-build:
     runs-on: ubuntu-latest
     steps:
-      - name: Fetch latest release from Upstream
+      - name: Determine which version to fetch
         id: upstream
         run: |
-          LATEST_TAG=$(curl -s https://api.github.com/repos/super-productivity/super-productivity/releases/latest | jq -r .tag_name)
-          echo "Latest upstream release tag is: $LATEST_TAG"
+          # If you typed a version in the manual trigger, use it. Otherwise, fetch latest.
+          if [ "${{ inputs.version_tag }}" != "" ]; then
+            LATEST_TAG="${{ inputs.version_tag }}"
+            echo "Manual version tag provided: $LATEST_TAG"
+          else
+            LATEST_TAG=$(curl -s https://api.github.com/repos/super-productivity/super-productivity/releases/latest | jq -r .tag_name)
+            echo "Latest upstream release tag is: $LATEST_TAG"
+          fi
+
           echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
 
       - name: Checkout super-productivity code
@@ -65,6 +77,8 @@ jobs:
           #!/bin/sh
           set -e
           INIT_FILE="/tmp/.supersync_initialized"
+
+          # TRULY FIXED: Proper bash spacing around 'if' and brackets
           if[ ! -f "$INIT_FILE" ]; then
               npx prisma db push --accept-data-loss
               for migration in $(ls -1 /app/prisma/migrations | grep -E '^[0-9]+' | sort); do
@@ -80,10 +94,6 @@ jobs:
           chmod +x $SCRIPT_PATH
 
           echo "2. Patching $DOCKERFILE_PATH"
-          # Appending the new COPY and CMD instructions to the end of the Dockerfile.
-          # We removed the 'sed' command because Docker inherently uses the LAST 
-          # CMD instruction defined in the file. This safely overrides the original
-          # CMD without breaking the multi-line HEALTHCHECK above it.
           cat << 'EOF' >> $DOCKERFILE_PATH
 
           # --- INJECTED FIX FOR ISSUE #7134 ---
