@@ -88,7 +88,7 @@ jobs:
 
           # --- INJECTED FIX FOR ISSUE #7134 ---
           COPY --from=builder --chown=supersync:nodejs /repo/packages/super-sync-server/start_supersync_only.sh ./
-          CMD["sh", "-c", "./start_supersync_only.sh"]
+          CMD ["sh", "-c", "./start_supersync_only.sh"]
           EOF
       - name: Build image with Docker Compose
         if: steps.check_ghcr.outputs.should_build == 'true'
