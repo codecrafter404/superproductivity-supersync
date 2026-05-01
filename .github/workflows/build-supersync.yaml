@@ -1,0 +1,88 @@
+name: Auto-Build SuperSync for GHCR
+
+on:
+  schedule:
+    - cron: "0 4 * * *" # Runs every day at 04:00 UTC
+  workflow_dispatch: # Allows you to trigger it manually
+
+# Required to push to GHCR
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  check-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch latest release from Upstream
+        id: upstream
+        run: |
+          # Get the latest release tag from the official GitHub API
+          LATEST_TAG=$(curl -s https://api.github.com/repos/super-productivity/super-productivity/releases/latest | jq -r .tag_name)
+          echo "Latest upstream release tag is: $LATEST_TAG"
+          echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+
+      - name: Checkout super-productivity code
+        uses: actions/checkout@v4
+        with:
+          # We explicitly check out the official repo at the release tag
+          repository: super-productivity/super-productivity
+          ref: ${{ steps.upstream.outputs.tag }}
+
+      - name: Get Package Version
+        id: package
+        run: |
+          VERSION=$(jq -r .version package.json)
+          echo "Found package version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }} # Automatically provided by GitHub
+
+      - name: Check if image already exists on GHCR
+        id: check_ghcr
+        run: |
+          VERSION=${{ steps.package.outputs.version }}
+
+          # Use Docker buildx to inspect the remote registry. 
+          # If it succeeds, the image exists. If it fails, we need to build.
+          if docker buildx imagetools inspect ghcr.io/codecrafter404/supersync:$VERSION > /dev/null 2>&1; then
+            echo "Image ghcr.io/codecrafter404/supersync:$VERSION already exists. Skipping build!"
+            echo "should_build=false" >> $GITHUB_OUTPUT
+          else
+            echo "Image does not exist yet. Proceeding to build!"
+            echo "should_build=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build image with Docker Compose
+        if: steps.check_ghcr.outputs.should_build == 'true'
+        run: |
+          docker compose -f ./packages/super-sync-server/docker-compose.build.yml build
+
+      - name: Tag and Push Images to GHCR
+        if: steps.check_ghcr.outputs.should_build == 'true'
+        run: |
+          VERSION=${{ steps.package.outputs.version }}
+
+          # Split the semver (e.g., 8.0.2 -> major=8, minor=0, patch=2)
+          IFS='.' read -r major minor patch <<< "$VERSION"
+
+          echo "Tagging versions: $VERSION, $major.$minor, $major, latest"
+
+          # Tag images for GHCR
+          docker tag supersync:local ghcr.io/codecrafter404/supersync:$VERSION
+          docker tag supersync:local ghcr.io/codecrafter404/supersync:$major.$minor
+          docker tag supersync:local ghcr.io/codecrafter404/supersync:$major
+          docker tag supersync:local ghcr.io/codecrafter404/supersync:latest
+
+          echo "Pushing images to GHCR..."
+
+          # Push images to GHCR
+          docker push ghcr.io/codecrafter404/supersync:$VERSION
+          docker push ghcr.io/codecrafter404/supersync:$major.$minor
+          docker push ghcr.io/codecrafter404/supersync:$major
+          docker push ghcr.io/codecrafter404/supersync:latest
