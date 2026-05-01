@@ -80,17 +80,16 @@ jobs:
           chmod +x $SCRIPT_PATH
 
           echo "2. Patching $DOCKERFILE_PATH"
-          # Comment out the existing CMD instruction safely using sed
-          sed -i 's/^[[:space:]]*CMD/# CMD/g' $DOCKERFILE_PATH
-
-          # Append the new COPY and CMD instructions to the end of the Dockerfile
+          # Appending the new COPY and CMD instructions to the end of the Dockerfile.
+          # We removed the 'sed' command because Docker inherently uses the LAST 
+          # CMD instruction defined in the file. This safely overrides the original
+          # CMD without breaking the multi-line HEALTHCHECK above it.
           cat << 'EOF' >> $DOCKERFILE_PATH
 
           # --- INJECTED FIX FOR ISSUE #7134 ---
           COPY --from=builder --chown=supersync:nodejs /repo/packages/super-sync-server/start_supersync_only.sh ./
-          CMD ["sh", "-c", "./start_supersync_only.sh"]
+          CMD["sh", "-c", "./start_supersync_only.sh"]
           EOF
-
       - name: Build image with Docker Compose
         if: steps.check_ghcr.outputs.should_build == 'true'
         run: |
