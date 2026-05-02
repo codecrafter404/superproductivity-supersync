@@ -79,7 +79,7 @@ jobs:
           INIT_FILE="/tmp/.supersync_initialized"
 
           # TRULY FIXED: Proper bash spacing around 'if' and brackets
-          if[ ! -f "$INIT_FILE" ]; then
+          if [ ! -f "$INIT_FILE" ]; then
               npx prisma db push --accept-data-loss
               for migration in $(ls -1 /app/prisma/migrations | grep -E '^[0-9]+' | sort); do
                   npx prisma migrate resolve --applied "$migration" 2>/dev/null || true
