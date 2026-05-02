@@ -19,7 +19,7 @@ jobs:
   check-and-build:
     runs-on: ubuntu-latest
     steps:
-      - name: Determine which version to fetch
+      - name: Fetch latest release from Upstream
         id: upstream
         run: |
           # If you typed a version in the manual trigger, use it. Otherwise, fetch latest.
@@ -30,12 +30,13 @@ jobs:
             LATEST_TAG=$(curl -s https://api.github.com/repos/super-productivity/super-productivity/releases/latest | jq -r .tag_name)
             echo "Latest upstream release tag is: $LATEST_TAG"
           fi
-
+          echo "Latest upstream release tag is: $LATEST_TAG"
           echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
 
       - name: Checkout super-productivity code
         uses: actions/checkout@v4
         with:
+          # We explicitly check out the official repo at the release tag
           repository: super-productivity/super-productivity
           ref: ${{ steps.upstream.outputs.tag }}
 
@@ -51,13 +52,15 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GITHUB_TOKEN }} # Automatically provided by GitHub
 
       - name: Check if image already exists on GHCR
         id: check_ghcr
         run: |
           VERSION=${{ steps.package.outputs.version }}
 
+          # Use Docker buildx to inspect the remote registry. 
+          # If it succeeds, the image exists. If it fails, we need to build.
           if docker buildx imagetools inspect ghcr.io/codecrafter404/supersync:$VERSION > /dev/null 2>&1; then
             echo "Image ghcr.io/codecrafter404/supersync:$VERSION already exists. Skipping build!"
             echo "should_build=false" >> $GITHUB_OUTPUT
@@ -66,40 +69,6 @@ jobs:
             echo "should_build=true" >> $GITHUB_OUTPUT
           fi
 
-      - name: Apply DB Migration Fix (Issue #7134)
-        if: steps.check_ghcr.outputs.should_build == 'true'
-        run: |
-          SCRIPT_PATH="packages/super-sync-server/start_supersync_only.sh"
-          DOCKERFILE_PATH="packages/super-sync-server/Dockerfile"
-
-          echo "1. Creating startup script at $SCRIPT_PATH"
-          cat << 'EOF' > $SCRIPT_PATH
-          #!/bin/sh
-          set -e
-          INIT_FILE="/tmp/.supersync_initialized"
-
-          # TRULY FIXED: Proper bash spacing around 'if' and brackets
-          if [ ! -f "$INIT_FILE" ]; then
-              npx prisma db push --accept-data-loss
-              for migration in $(ls -1 /app/prisma/migrations | grep -E '^[0-9]+' | sort); do
-                  npx prisma migrate resolve --applied "$migration" 2>/dev/null || true
-              done
-              touch "$INIT_FILE"
-          fi
-          npx prisma migrate deploy
-          node dist/src/index.js
-          EOF
-
-          # Make the script executable
-          chmod +x $SCRIPT_PATH
-
-          echo "2. Patching $DOCKERFILE_PATH"
-          cat << 'EOF' >> $DOCKERFILE_PATH
-
-          # --- INJECTED FIX FOR ISSUE #7134 ---
-          COPY --from=builder --chown=supersync:nodejs /repo/packages/super-sync-server/start_supersync_only.sh ./
-          CMD ["sh", "-c", "./start_supersync_only.sh"]
-          EOF
       - name: Build image with Docker Compose
         if: steps.check_ghcr.outputs.should_build == 'true'
         run: |
@@ -109,7 +78,11 @@ jobs:
         if: steps.check_ghcr.outputs.should_build == 'true'
         run: |
           VERSION=${{ steps.package.outputs.version }}
+
+          # Split the semver (e.g., 8.0.2 -> major=8, minor=0, patch=2)
           IFS='.' read -r major minor patch <<< "$VERSION"
+
+          echo "Tagging versions: $VERSION, $major.$minor, $major, latest"
 
           # Tag images for GHCR
           docker tag supersync:local ghcr.io/codecrafter404/supersync:$VERSION
@@ -118,6 +91,8 @@ jobs:
           docker tag supersync:local ghcr.io/codecrafter404/supersync:latest
 
           echo "Pushing images to GHCR..."
+
+          # Push images to GHCR
           docker push ghcr.io/codecrafter404/supersync:$VERSION
           docker push ghcr.io/codecrafter404/supersync:$major.$minor
           docker push ghcr.io/codecrafter404/supersync:$major
